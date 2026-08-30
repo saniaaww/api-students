@@ -2,7 +2,7 @@
 
 REST API untuk mengelola data mahasiswa menggunakan Go dan Fiber v2.
 
-Project ini dibuat untuk memenuhi tugas mandiri Pertemuan 2 — REST API & HTTP Deep Dive.
+Project ini dibuat untuk memenuhi tugas mandiri Pertemuan 3 — REST API & HTTP Deep Dive.
 
 ---
 
