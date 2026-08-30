@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"api-students/app/repository"
+	"api-students/database"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -36,6 +39,17 @@ func requireJSON(c *fiber.Ctx) error {
 }
 
 func main() {
+
+	// Koneksi ke PostgreSQL
+	pool, err := database.ConnectDB()
+	if err != nil {
+		log.Fatal("Gagal terhubung ke database:", err)
+	}
+	defer pool.Close()
+
+	// Membuat repository untuk mengakses data student
+	studentRepo := repository.NewStudentRepository(pool)
+
 	app := fiber.New(fiber.Config{
 		AppName: "API Students - Praktikum Backend Lanjut",
 
@@ -71,10 +85,21 @@ func main() {
 
 	// Health check
 	api.Get("/health", func(c *fiber.Ctx) error {
+
+		// Mengecek koneksi PostgreSQL
+		if err := pool.Ping(c.Context()); err != nil {
+			return errorResponse(
+				c,
+				fiber.StatusServiceUnavailable,
+				"database tidak dapat diakses",
+				nil,
+			)
+		}
+
 		return successResponse(
 			c,
 			fiber.StatusOK,
-			"server berjalan",
+			"server dan database berjalan",
 			fiber.Map{
 				"timestamp": time.Now(),
 			},
@@ -85,23 +110,30 @@ func main() {
 	// Group students
 	studentsAPI := api.Group("/students", requireJSON)
 
-	// GET daftar mahasiswa
-	studentsAPI.Get("/", getStudents)
+	// Endpoint mahasiswa
+	studentsAPI.Get("/", func(c *fiber.Ctx) error {
+		return getStudents(c, studentRepo)
+	})
 
-	// GET satu mahasiswa
-	studentsAPI.Get("/:id", getStudent)
+	studentsAPI.Get("/:id", func(c *fiber.Ctx) error {
+		return getStudent(c, studentRepo)
+	})
 
-	// POST mahasiswa
-	studentsAPI.Post("/", createStudent)
+	studentsAPI.Post("/", func(c *fiber.Ctx) error {
+		return createStudent(c, studentRepo)
+	})
 
-	// PUT mahasiswa
-	studentsAPI.Put("/:id", replaceStudent)
+	studentsAPI.Put("/:id", func(c *fiber.Ctx) error {
+		return replaceStudent(c, studentRepo)
+	})
 
-	// PATCH mahasiswa
-	studentsAPI.Patch("/:id", patchStudent)
+	studentsAPI.Patch("/:id", func(c *fiber.Ctx) error {
+		return patchStudent(c, studentRepo)
+	})
 
-	// DELETE mahasiswa
-	studentsAPI.Delete("/:id", deleteStudent)
+	studentsAPI.Delete("/:id", func(c *fiber.Ctx) error {
+		return deleteStudent(c, studentRepo)
+	})
 
 	// Endpoint tidak ditemukan
 	app.Use(func(c *fiber.Ctx) error {
