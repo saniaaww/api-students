@@ -7,4 +7,11 @@ CREATE TABLE students (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE prestasi (
+    idprestasi SERIAL PRIMARY KEY,
+    id SERIAL FOREIGN KEY student, 
+    name VARCHAR(100) NOT NULL,
+    Juara VARCHAR (1) NOT NULL
+); 
+	
 CREATE INDEX idx_students_name ON students(name);
