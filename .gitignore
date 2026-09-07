@@ -1,3 +1,5 @@
 *.exe
 *.exe~
 .env
+logs/
+api-students.zip
