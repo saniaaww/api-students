@@ -11,6 +11,12 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type AuthUser struct {
+	UserID   int64
+	Username string
+	Role     string
+}
+
 type RegisterRequest struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`

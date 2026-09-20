@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
 	"api-students/app/repository"
 	"api-students/config"
 	"api-students/database"
+	"api-students/helper"
 	"api-students/route"
 
 	"github.com/gofiber/fiber/v2"
@@ -36,6 +38,18 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	refreshRepo := repository.NewRefreshTokenRepository(pool)
 
+	// Repository untuk role dan permission
+	roleRepo := repository.NewRoleRepository(pool)
+
+	// Memuat permission dari database saat aplikasi dijalankan
+	rolePermissions, err := roleRepo.LoadPermissions(context.Background())
+	if err != nil {
+		log.Fatal("Gagal memuat permissions:", err)
+	}
+
+	// Membuat PermissionSet
+	permissionSet := helper.NewPermissionSet(rolePermissions)
+
 	// Membuat aplikasi Fiber
 	app := fiber.New(fiber.Config{
 		AppName: "API Students - Praktikum Backend Lanjut",
@@ -47,7 +61,15 @@ func main() {
 	app.Use(cors.New())
 
 	// Registrasi seluruh route
-	route.Register(app, pool, studentRepo, userRepo, env.JWTSecret, refreshRepo)
+	route.Register(
+		app,
+		pool,
+		studentRepo,
+		userRepo,
+		env.JWTSecret,
+		refreshRepo,
+		permissionSet,
+	)
 
 	fmt.Println("Server berjalan di http://localhost:3000")
 

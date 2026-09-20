@@ -5,6 +5,7 @@ import (
 
 	"api-students/app/repository"
 	"api-students/app/service"
+	"api-students/helper"
 	"api-students/middleware"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,8 +20,17 @@ func Register(
 	userRepo repository.UserRepository,
 	jwtSecret string,
 	refreshRepo repository.RefreshTokenRepository,
+	permissionSet *helper.PermissionSet,
 ) {
+	// =====================================================
+	// Home
+	// =====================================================
+
 	app.Get("/", service.Home)
+
+	// =====================================================
+	// API
+	// =====================================================
 
 	api := app.Group("/api/v1")
 
@@ -28,13 +38,19 @@ func Register(
 		return service.Health(c, pool)
 	})
 
+	// =====================================================
+	// Authentication
+	// =====================================================
+
 	auth := api.Group("/auth")
 
-	auth.Post("/register", service.RegisterHandler(userRepo))
+	auth.Post(
+		"/register",
+		service.RegisterHandler(userRepo),
+	)
 
 	// Rate limiter untuk login:
 	// maksimal 5 percobaan dalam 1 menit.
-	// Percobaan ke-6 akan mendapatkan 429.
 	loginLimiter := limiter.New(limiter.Config{
 		Max:        5,
 		Expiration: 1 * time.Minute,
@@ -58,13 +74,19 @@ func Register(
 		),
 	)
 
-	auth.Post("/refresh", service.RefreshHandler(
-		userRepo,
-		refreshRepo,
-		jwtSecret,
-	))
+	auth.Post(
+		"/refresh",
+		service.RefreshHandler(
+			userRepo,
+			refreshRepo,
+			jwtSecret,
+		),
+	)
 
-	auth.Post("/logout", service.LogoutHandler(refreshRepo))
+	auth.Post(
+		"/logout",
+		service.LogoutHandler(refreshRepo),
+	)
 
 	auth.Get(
 		"/me",
@@ -72,32 +94,125 @@ func Register(
 		service.MeHandler(userRepo),
 	)
 
+	// =====================================================
+	// Students
+	// =====================================================
+
+	// Semua endpoint students wajib login terlebih dahulu.
 	students := api.Group(
 		"/students",
 		middleware.RequireAuth(jwtSecret),
 	)
 
-	students.Get("/", func(c *fiber.Ctx) error {
-		return service.GetStudents(c, repo)
-	})
+	// -----------------------------------------------------
+	// GET /api/v1/students
+	// Permission: student:list
+	// -----------------------------------------------------
 
-	students.Get("/:id", func(c *fiber.Ctx) error {
-		return service.GetStudent(c, repo)
-	})
+	students.Get(
+		"/",
+		middleware.RequirePermission(
+			permissionSet,
+			"student:list",
+		),
+		func(c *fiber.Ctx) error {
+			return service.GetStudents(
+				c,
+				repo,
+			)
+		},
+	)
 
-	students.Post("/", func(c *fiber.Ctx) error {
-		return service.CreateStudent(c, repo)
-	})
+	// -----------------------------------------------------
+	// GET /api/v1/students/:id
+	// Ownership:
+	// - Owner boleh melihat data sendiri.
+	// - Non-owner membutuhkan student:read:any.
+	// -----------------------------------------------------
 
-	students.Put("/:id", func(c *fiber.Ctx) error {
-		return service.ReplaceStudent(c, repo)
-	})
+	students.Get(
+		"/:id",
+		func(c *fiber.Ctx) error {
+			return service.GetStudent(
+				c,
+				repo,
+				permissionSet,
+			)
+		},
+	)
 
-	students.Patch("/:id", func(c *fiber.Ctx) error {
-		return service.PatchStudent(c, repo)
-	})
+	// -----------------------------------------------------
+	// POST /api/v1/students
+	// Permission: student:create
+	// OwnerID diambil otomatis dari user yang login.
+	// -----------------------------------------------------
 
-	students.Delete("/:id", func(c *fiber.Ctx) error {
-		return service.DeleteStudent(c, repo)
-	})
+	students.Post(
+		"/",
+		middleware.RequirePermission(
+			permissionSet,
+			"student:create",
+		),
+		func(c *fiber.Ctx) error {
+			return service.CreateStudent(
+				c,
+				repo,
+			)
+		},
+	)
+
+	// -----------------------------------------------------
+	// PUT /api/v1/students/:id
+	// Ownership:
+	// - Owner boleh mengubah data sendiri.
+	// - Non-owner membutuhkan student:update:any.
+	// -----------------------------------------------------
+
+	students.Put(
+		"/:id",
+		func(c *fiber.Ctx) error {
+			return service.ReplaceStudent(
+				c,
+				repo,
+				permissionSet,
+			)
+		},
+	)
+
+	// -----------------------------------------------------
+	// PATCH /api/v1/students/:id
+	// Ownership:
+	// - Owner boleh mengubah data sendiri.
+	// - Non-owner membutuhkan student:update:any.
+	// -----------------------------------------------------
+
+	students.Patch(
+		"/:id",
+		func(c *fiber.Ctx) error {
+			return service.PatchStudent(
+				c,
+				repo,
+				permissionSet,
+			)
+		},
+	)
+
+	// -----------------------------------------------------
+	// DELETE /api/v1/students/:id
+	// Permission: student:delete
+	// -----------------------------------------------------
+
+	students.Delete(
+		"/:id",
+		middleware.RequirePermission(
+			permissionSet,
+			"student:delete",
+		),
+		func(c *fiber.Ctx) error {
+			return service.DeleteStudent(
+				c,
+				repo,
+			)
+		},
+	)
 }

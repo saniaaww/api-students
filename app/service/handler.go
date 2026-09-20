@@ -27,6 +27,28 @@ func parseStudentID(c *fiber.Ctx) (int, bool) {
 	return id, true
 }
 
+// getCurrentAuthUser mengambil identitas user yang sedang login
+// dari Locals yang sudah diisi oleh middleware RequireAuth.
+func getCurrentAuthUser(c *fiber.Ctx) (model.AuthUser, bool) {
+	userID, ok := c.Locals("user_id").(int64)
+	if !ok {
+		return model.AuthUser{}, false
+	}
+
+	role, ok := c.Locals("role").(string)
+	if !ok || role == "" {
+		return model.AuthUser{}, false
+	}
+
+	username, _ := c.Locals("username").(string)
+
+	return model.AuthUser{
+		UserID:   userID,
+		Username: username,
+		Role:     role,
+	}, true
+}
+
 // =====================================================
 // GET /api/v1/students
 // =====================================================
@@ -221,6 +243,7 @@ func GetStudents(
 func GetStudent(
 	c *fiber.Ctx,
 	repo repository.StudentRepository,
+	perms *helper.PermissionSet,
 ) error {
 
 	id, valid := parseStudentID(c)
@@ -253,6 +276,31 @@ func GetStudent(
 			c,
 			fiber.StatusInternalServerError,
 			"gagal mengambil data student",
+			nil,
+		)
+	}
+
+	currentUser, ok := getCurrentAuthUser(c)
+
+	if !ok {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusUnauthorized,
+			"identitas user tidak valid",
+			nil,
+		)
+	}
+
+	if !CanAccessStudent(
+		currentUser,
+		student.OwnerID,
+		perms,
+		"student:read:any",
+	) {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusForbidden,
+			"forbidden",
 			nil,
 		)
 	}
@@ -301,11 +349,23 @@ func CreateStudent(
 		)
 	}
 
+	currentUser, ok := getCurrentAuthUser(c)
+
+	if !ok {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusUnauthorized,
+			"identitas user tidak valid",
+			nil,
+		)
+	}
+
 	student := model.Student{
 		NIM:      req.NIM,
 		Name:     req.Name,
 		Grade:    req.Grade,
 		IsActive: req.IsActive,
+		OwnerID:  int(currentUser.UserID),
 	}
 
 	result, err := repo.Create(
@@ -354,6 +414,7 @@ func CreateStudent(
 func ReplaceStudent(
 	c *fiber.Ctx,
 	repo repository.StudentRepository,
+	perms *helper.PermissionSet,
 ) error {
 
 	id, valid := parseStudentID(c)
@@ -363,6 +424,57 @@ func ReplaceStudent(
 			c,
 			fiber.StatusBadRequest,
 			"id harus berupa angka positif",
+			nil,
+		)
+	}
+
+	// Ambil data lama terlebih dahulu untuk pemeriksaan ownership.
+	current, err := repo.FindByID(
+		c.Context(),
+		id,
+	)
+
+	if errors.Is(err, repository.ErrNotFound) {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusNotFound,
+			"student tidak ditemukan",
+			nil,
+		)
+	}
+
+	if err != nil {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusInternalServerError,
+			"gagal mengambil data student",
+			nil,
+		)
+	}
+
+	currentUser, ok := getCurrentAuthUser(c)
+
+	if !ok {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusUnauthorized,
+			"identitas user tidak valid",
+			nil,
+		)
+	}
+
+	// Owner boleh mengubah data sendiri.
+	// Non-owner membutuhkan student:update:any.
+	if !CanAccessStudent(
+		currentUser,
+		current.OwnerID,
+		perms,
+		"student:update:any",
+	) {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusForbidden,
+			"forbidden",
 			nil,
 		)
 	}
@@ -393,12 +505,16 @@ func ReplaceStudent(
 		)
 	}
 
+	// OwnerID sengaja tidak diambil dari request.
+	// OwnerID tetap menggunakan owner data sebelumnya.
 	student := model.Student{
-		ID:       id,
-		NIM:      req.NIM,
-		Name:     req.Name,
-		Grade:    req.Grade,
-		IsActive: req.IsActive,
+		ID:        id,
+		NIM:       req.NIM,
+		Name:      req.Name,
+		Grade:     req.Grade,
+		IsActive:  req.IsActive,
+		OwnerID:   current.OwnerID,
+		CreatedAt: current.CreatedAt,
 	}
 
 	result, err := repo.Update(
@@ -452,6 +568,7 @@ func ReplaceStudent(
 func PatchStudent(
 	c *fiber.Ctx,
 	repo repository.StudentRepository,
+	perms *helper.PermissionSet,
 ) error {
 
 	id, valid := parseStudentID(c)
@@ -465,6 +582,7 @@ func PatchStudent(
 		)
 	}
 
+	// Ambil data lama terlebih dahulu.
 	current, err := repo.FindByID(
 		c.Context(),
 		id,
@@ -484,6 +602,33 @@ func PatchStudent(
 			c,
 			fiber.StatusInternalServerError,
 			"gagal mengambil data student",
+			nil,
+		)
+	}
+
+	currentUser, ok := getCurrentAuthUser(c)
+
+	if !ok {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusUnauthorized,
+			"identitas user tidak valid",
+			nil,
+		)
+	}
+
+	// Owner boleh mengubah data sendiri.
+	// Non-owner membutuhkan student:update:any.
+	if !CanAccessStudent(
+		currentUser,
+		current.OwnerID,
+		perms,
+		"student:update:any",
+	) {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusForbidden,
+			"forbidden",
 			nil,
 		)
 	}
@@ -530,6 +675,9 @@ func PatchStudent(
 			validationErrors,
 		)
 	}
+
+	// OwnerID tetap menggunakan owner dari data lama.
+	updated.OwnerID = current.OwnerID
 
 	result, err := repo.Update(
 		c.Context(),

@@ -70,21 +70,25 @@ func (r *studentRepository) FindAll(
 		args = append(args, "%"+search+"%")
 		argNumber++
 	}
+
 	if isActive != nil {
 		where += fmt.Sprintf(" AND is_active = $%d", argNumber)
 		args = append(args, *isActive)
 		argNumber++
 	}
+
 	if gradeMin != nil {
 		where += fmt.Sprintf(" AND grade >= $%d", argNumber)
 		args = append(args, *gradeMin)
 		argNumber++
 	}
+
 	if gradeMax != nil {
 		where += fmt.Sprintf(" AND grade <= $%d", argNumber)
 		args = append(args, *gradeMax)
 		argNumber++
 	}
+
 	allowedSort := map[string]string{
 		"id":         "id",
 		"nim":        "nim",
@@ -93,6 +97,7 @@ func (r *studentRepository) FindAll(
 		"is_active":  "is_active",
 		"created_at": "created_at",
 	}
+
 	sortColumn, ok := allowedSort[sort]
 	if !ok {
 		sortColumn = "id"
@@ -103,7 +108,7 @@ func (r *studentRepository) FindAll(
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, nim, name, grade, is_active, created_at
+		SELECT id, nim, name, grade, is_active, owner_id, created_at
 		FROM students
 		%s
 		ORDER BY %s %s
@@ -129,6 +134,7 @@ func (r *studentRepository) FindAll(
 			&student.Name,
 			&student.Grade,
 			&student.IsActive,
+			&student.OwnerID,
 			&student.CreatedAt,
 		)
 
@@ -151,7 +157,11 @@ func (r *studentRepository) FindAll(
 		%s
 	`, where)
 
-	if err := r.db.QueryRow(ctx, countQuery, args[:len(args)-2]...).Scan(&total); err != nil {
+	if err := r.db.QueryRow(
+		ctx,
+		countQuery,
+		args[:len(args)-2]...,
+	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
@@ -166,7 +176,7 @@ func (r *studentRepository) FindByID(
 	var student model.Student
 
 	query := `
-		SELECT id, nim, name, grade, is_active, created_at
+		SELECT id, nim, name, grade, is_active, owner_id, created_at
 		FROM students
 		WHERE id = $1
 	`
@@ -177,6 +187,7 @@ func (r *studentRepository) FindByID(
 		&student.Name,
 		&student.Grade,
 		&student.IsActive,
+		&student.OwnerID,
 		&student.CreatedAt,
 	)
 
@@ -197,9 +208,15 @@ func (r *studentRepository) Create(
 ) (model.Student, error) {
 
 	query := `
-		INSERT INTO students (nim, name, grade, is_active)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, nim, name, grade, is_active, created_at
+		INSERT INTO students (
+			nim,
+			name,
+			grade,
+			is_active,
+			owner_id
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, nim, name, grade, is_active, owner_id, created_at
 	`
 
 	var result model.Student
@@ -211,12 +228,14 @@ func (r *studentRepository) Create(
 		student.Name,
 		student.Grade,
 		student.IsActive,
+		student.OwnerID,
 	).Scan(
 		&result.ID,
 		&result.NIM,
 		&result.Name,
 		&result.Grade,
 		&result.IsActive,
+		&result.OwnerID,
 		&result.CreatedAt,
 	)
 
@@ -242,11 +261,11 @@ func (r *studentRepository) Update(
 	query := `
 		UPDATE students
 		SET nim = $1,
-		    name = $2,
-		    grade = $3,
-		    is_active = $4
+			name = $2,
+			grade = $3,
+			is_active = $4
 		WHERE id = $5
-		RETURNING id, nim, name, grade, is_active, created_at
+		RETURNING id, nim, name, grade, is_active, owner_id, created_at
 	`
 
 	var result model.Student
@@ -265,6 +284,7 @@ func (r *studentRepository) Update(
 		&result.Name,
 		&result.Grade,
 		&result.IsActive,
+		&result.OwnerID,
 		&result.CreatedAt,
 	)
 
