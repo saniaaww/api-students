@@ -4,15 +4,18 @@ import (
 	"testing"
 
 	"api-students/app/model"
+	"api-students/helper"
 )
-func TestValidateCreateStudent(t *testing.T) {
+
+func TestCreateStudentValidation(t *testing.T) {
 	req := model.CreateStudentRequest{
 		NIM:      "",
 		Name:     "",
 		Grade:    101,
 		IsActive: true,
 	}
-	errors := ValidateCreateStudent(req)
+
+	errors := helper.ValidateStruct(req)
 
 	if errors["nim"] == "" {
 		t.Error("seharusnya NIM menghasilkan error")
@@ -26,7 +29,8 @@ func TestValidateCreateStudent(t *testing.T) {
 		t.Error("seharusnya grade menghasilkan error")
 	}
 }
-func TestValidateUpdateStudent(t *testing.T) {
+
+func TestUpdateStudentValidation(t *testing.T) {
 	req := model.UpdateStudentRequest{
 		NIM:      "",
 		Name:     "",
@@ -34,7 +38,7 @@ func TestValidateUpdateStudent(t *testing.T) {
 		IsActive: true,
 	}
 
-	errors := ValidateUpdateStudent(req)
+	errors := helper.ValidateStruct(req)
 
 	if errors["nim"] == "" {
 		t.Error("seharusnya NIM menghasilkan error")
@@ -66,11 +70,7 @@ func TestApplyPatch(t *testing.T) {
 		Grade: &newGrade,
 	}
 
-	errors := ApplyPatch(&current, req)
-
-	if len(errors) != 0 {
-		t.Errorf("seharusnya tidak ada error, tetapi mendapat: %v", errors)
-	}
+	ApplyPatch(&current, req)
 
 	if current.Name != "Warda" {
 		t.Errorf("Name tidak berubah, mendapatkan: %s", current.Name)
