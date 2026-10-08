@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/csv"
 	"errors"
 	"strconv"
 	"strings"
@@ -13,7 +15,7 @@ import (
 )
 
 // =====================================================
-// Helper
+// HELPER
 // =====================================================
 
 // parseStudentID mengambil ID dari URL parameter.
@@ -27,8 +29,7 @@ func parseStudentID(c *fiber.Ctx) (int, bool) {
 	return id, true
 }
 
-// getCurrentAuthUser mengambil identitas user yang sedang login
-// dari Locals yang sudah diisi oleh middleware RequireAuth.
+// getCurrentAuthUser mengambil identitas user yang sedang login.
 func getCurrentAuthUser(c *fiber.Ctx) (model.AuthUser, bool) {
 	userID, ok := c.Locals("user_id").(int64)
 	if !ok {
@@ -50,6 +51,99 @@ func getCurrentAuthUser(c *fiber.Ctx) (model.AuthUser, bool) {
 }
 
 // =====================================================
+// CONTENT NEGOTIATION
+// =====================================================
+
+// wantsCSV menentukan format response berdasarkan header Accept.
+//
+// application/json -> JSON
+// text/csv         -> CSV
+// */*              -> JSON
+// kosong           -> JSON
+// format lain      -> 406 Not Acceptable
+func wantsCSV(c *fiber.Ctx) (bool, error) {
+
+	accept := strings.ToLower(
+		strings.TrimSpace(c.Get("Accept")),
+	)
+
+	// Jika Accept kosong -> JSON
+	if accept == "" {
+		return false, nil
+	}
+
+	// CSV memiliki prioritas jika diminta secara eksplisit.
+	if strings.Contains(accept, "text/csv") {
+		return true, nil
+	}
+
+	// JSON
+	if strings.Contains(accept, "application/json") {
+		return false, nil
+	}
+
+	// Wildcard -> JSON
+	if strings.Contains(accept, "*/*") {
+		return false, nil
+	}
+
+	// Format tidak didukung.
+	return false, helper.NotAcceptable(
+		"format response tidak didukung",
+	)
+}
+
+// =====================================================
+// CSV RESPONSE
+// =====================================================
+
+func studentsToCSV(students []model.Student) ([]byte, error) {
+
+	var buffer bytes.Buffer
+
+	writer := csv.NewWriter(&buffer)
+
+	// Header CSV
+	if err := writer.Write([]string{
+		"id",
+		"nim",
+		"name",
+		"grade",
+		"is_active",
+		"owner_id",
+		"created_at",
+	}); err != nil {
+		return nil, err
+	}
+
+	// Data student
+	for _, student := range students {
+
+		err := writer.Write([]string{
+			strconv.Itoa(student.ID),
+			student.NIM,
+			student.Name,
+			strconv.FormatFloat(student.Grade, 'f', 2, 64),
+			strconv.FormatBool(student.IsActive),
+			strconv.Itoa(student.OwnerID),
+			student.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	writer.Flush()
+
+	if err := writer.Error(); err != nil {
+		return nil, err
+	}
+
+	return buffer.Bytes(), nil
+}
+
+// =====================================================
 // GET /api/v1/students
 // =====================================================
 
@@ -58,27 +152,24 @@ func GetStudents(
 	repo repository.StudentRepository,
 ) error {
 
-	page := 1
-	limit := 10
+	// =====================================================
+	// CONTENT NEGOTIATION
+	// =====================================================
 
-	// Pagination: page
-	if value := c.Query("page"); value != "" {
-		parsed, err := strconv.Atoi(value)
+	useCSV, err := wantsCSV(c)
 
-		if err != nil || parsed < 1 {
-			return helper.ErrorResponse(
-				c,
-				fiber.StatusBadRequest,
-				"page harus berupa angka positif",
-				nil,
-			)
-		}
-
-		page = parsed
+	if err != nil {
+		return err
 	}
 
-	// Pagination: limit
+	// =====================================================
+	// LIMIT
+	// =====================================================
+
+	limit := 10
+
 	if value := c.Query("limit"); value != "" {
+
 		parsed, err := strconv.Atoi(value)
 
 		if err != nil || parsed < 1 {
@@ -97,15 +188,22 @@ func GetStudents(
 		limit = parsed
 	}
 
-	// Search berdasarkan nama.
+	// =====================================================
+	// SEARCH
+	// =====================================================
+
 	search := strings.TrimSpace(
 		c.Query("search"),
 	)
 
-	// Filter is_active.
+	// =====================================================
+	// FILTER IS_ACTIVE
+	// =====================================================
+
 	var isActive *bool
 
 	if value := c.Query("is_active"); value != "" {
+
 		parsed, err := strconv.ParseBool(value)
 
 		if err != nil {
@@ -120,10 +218,14 @@ func GetStudents(
 		isActive = &parsed
 	}
 
-	// Filter grade minimum.
+	// =====================================================
+	// FILTER GRADE MIN
+	// =====================================================
+
 	var gradeMin *float64
 
 	if value := c.Query("grade_min"); value != "" {
+
 		parsed, err := strconv.ParseFloat(value, 64)
 
 		if err != nil {
@@ -138,10 +240,14 @@ func GetStudents(
 		gradeMin = &parsed
 	}
 
-	// Filter grade maksimum.
+	// =====================================================
+	// FILTER GRADE MAX
+	// =====================================================
+
 	var gradeMax *float64
 
 	if value := c.Query("grade_max"); value != "" {
+
 		parsed, err := strconv.ParseFloat(value, 64)
 
 		if err != nil {
@@ -156,16 +262,132 @@ func GetStudents(
 		gradeMax = &parsed
 	}
 
-	// Sort dan order.
+	// =====================================================
+	// CURSOR PAGINATION
+	// =====================================================
+
+	if cursorValue := c.Query("cursor"); cursorValue != "" {
+
+		cursor, err := strconv.Atoi(cursorValue)
+
+		if err != nil || cursor < 0 {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"cursor harus berupa angka nol atau positif",
+				nil,
+			)
+		}
+
+		students, err := repo.FindAllCursor(
+			c.Context(),
+			search,
+			isActive,
+			gradeMin,
+			gradeMax,
+			limit,
+			cursor,
+		)
+
+		if err != nil {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusInternalServerError,
+				"gagal mengambil data student",
+				nil,
+			)
+		}
+
+		// =================================================
+		// CSV
+		// =================================================
+
+		if useCSV {
+
+			csvData, err := studentsToCSV(students)
+
+			if err != nil {
+				return helper.ErrorResponse(
+					c,
+					fiber.StatusInternalServerError,
+					"gagal membuat response CSV",
+					nil,
+				)
+			}
+
+			c.Set("Content-Type", "text/csv; charset=utf-8")
+			c.Set(
+				"Content-Disposition",
+				`attachment; filename="students.csv"`,
+			)
+
+			return c.Send(csvData)
+		}
+
+		// =================================================
+		// JSON
+		// =================================================
+
+		nextCursor := 0
+
+		if len(students) > 0 {
+			nextCursor = students[len(students)-1].ID
+		}
+
+		hasNext := len(students) == limit
+
+		return helper.SuccessResponse(
+			c,
+			fiber.StatusOK,
+			"Data student berhasil diambil",
+			students,
+			map[string]interface{}{
+				"limit":       limit,
+				"cursor":      cursor,
+				"next_cursor": nextCursor,
+				"has_next":    hasNext,
+			},
+		)
+	}
+
+	// =====================================================
+	// PAGINATION OFFSET
+	// =====================================================
+
+	page := 1
+
+	if value := c.Query("page"); value != "" {
+
+		parsed, err := strconv.Atoi(value)
+
+		if err != nil || parsed < 1 {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"page harus berupa angka positif",
+				nil,
+			)
+		}
+
+		page = parsed
+	}
+
+	// =====================================================
+	// SORT & ORDER
+	// =====================================================
+
 	sortField := strings.ToLower(
-		strings.TrimSpace(c.Query("sort", "id")),
+		strings.TrimSpace(
+			c.Query("sort", "id"),
+		),
 	)
 
 	order := strings.ToLower(
-		strings.TrimSpace(c.Query("order", "asc")),
+		strings.TrimSpace(
+			c.Query("order", "asc"),
+		),
 	)
 
-	// Whitelist field sorting.
 	allowedSort := map[string]bool{
 		"id":        true,
 		"nim":       true,
@@ -192,7 +414,10 @@ func GetStudents(
 		)
 	}
 
-	// Menghitung offset untuk PostgreSQL.
+	// =====================================================
+	// OFFSET
+	// =====================================================
+
 	offset := (page - 1) * limit
 
 	students, total, err := repo.FindAll(
@@ -216,6 +441,36 @@ func GetStudents(
 		)
 	}
 
+	// =====================================================
+	// CSV
+	// =====================================================
+
+	if useCSV {
+
+		csvData, err := studentsToCSV(students)
+
+		if err != nil {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusInternalServerError,
+				"gagal membuat response CSV",
+				nil,
+			)
+		}
+
+		c.Set("Content-Type", "text/csv; charset=utf-8")
+		c.Set(
+			"Content-Disposition",
+			`attachment; filename="students.csv"`,
+		)
+
+		return c.Send(csvData)
+	}
+
+	// =====================================================
+	// JSON
+	// =====================================================
+
 	totalPages := 0
 
 	if total > 0 {
@@ -232,6 +487,222 @@ func GetStudents(
 			"limit":       limit,
 			"total":       total,
 			"total_pages": totalPages,
+		},
+	)
+}
+
+// =====================================================
+// GET /api/v1/students/cursor
+// =====================================================
+
+func GetStudentsCursor(
+	c *fiber.Ctx,
+	repo repository.StudentRepository,
+) error {
+
+	// =====================================================
+	// CONTENT NEGOTIATION
+	// =====================================================
+
+	useCSV, err := wantsCSV(c)
+
+	if err != nil {
+		return err
+	}
+
+	// =====================================================
+	// LIMIT
+	// =====================================================
+
+	limit := 10
+
+	if value := c.Query("limit"); value != "" {
+
+		parsed, err := strconv.Atoi(value)
+
+		if err != nil || parsed < 1 {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"limit harus berupa angka positif",
+				nil,
+			)
+		}
+
+		if parsed > 50 {
+			parsed = 50
+		}
+
+		limit = parsed
+	}
+
+	// =====================================================
+	// CURSOR
+	// =====================================================
+
+	cursor := 0
+
+	if value := c.Query("cursor"); value != "" {
+
+		parsed, err := strconv.Atoi(value)
+
+		if err != nil || parsed < 0 {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"cursor harus berupa angka 0 atau lebih",
+				nil,
+			)
+		}
+
+		cursor = parsed
+	}
+
+	// =====================================================
+	// SEARCH
+	// =====================================================
+
+	search := strings.TrimSpace(
+		c.Query("search"),
+	)
+
+	// =====================================================
+	// FILTER IS_ACTIVE
+	// =====================================================
+
+	var isActive *bool
+
+	if value := c.Query("is_active"); value != "" {
+
+		parsed, err := strconv.ParseBool(value)
+
+		if err != nil {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"is_active harus bernilai true atau false",
+				nil,
+			)
+		}
+
+		isActive = &parsed
+	}
+
+	// =====================================================
+	// FILTER GRADE MIN
+	// =====================================================
+
+	var gradeMin *float64
+
+	if value := c.Query("grade_min"); value != "" {
+
+		parsed, err := strconv.ParseFloat(value, 64)
+
+		if err != nil {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"grade_min harus berupa angka",
+				nil,
+			)
+		}
+
+		gradeMin = &parsed
+	}
+
+	// =====================================================
+	// FILTER GRADE MAX
+	// =====================================================
+
+	var gradeMax *float64
+
+	if value := c.Query("grade_max"); value != "" {
+
+		parsed, err := strconv.ParseFloat(value, 64)
+
+		if err != nil {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"grade_max harus berupa angka",
+				nil,
+			)
+		}
+
+		gradeMax = &parsed
+	}
+
+	// =====================================================
+	// QUERY DATABASE
+	// =====================================================
+
+	students, err := repo.FindAllCursor(
+		c.Context(),
+		search,
+		isActive,
+		gradeMin,
+		gradeMax,
+		limit,
+		cursor,
+	)
+
+	if err != nil {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusInternalServerError,
+			"gagal mengambil data student",
+			nil,
+		)
+	}
+
+	// =====================================================
+	// CSV
+	// =====================================================
+
+	if useCSV {
+
+		csvData, err := studentsToCSV(students)
+
+		if err != nil {
+			return helper.ErrorResponse(
+				c,
+				fiber.StatusInternalServerError,
+				"gagal membuat response CSV",
+				nil,
+			)
+		}
+
+		c.Set("Content-Type", "text/csv; charset=utf-8")
+		c.Set(
+			"Content-Disposition",
+			`attachment; filename="students.csv"`,
+		)
+
+		return c.Send(csvData)
+	}
+
+	// =====================================================
+	// JSON
+	// =====================================================
+
+	nextCursor := 0
+
+	if len(students) > 0 {
+		nextCursor = students[len(students)-1].ID
+	}
+
+	hasNext := len(students) == limit
+
+	return helper.SuccessResponse(
+		c,
+		fiber.StatusOK,
+		"Data student berhasil diambil",
+		students,
+		map[string]interface{}{
+			"limit":       limit,
+			"cursor":      cursor,
+			"next_cursor": nextCursor,
+			"has_next":    hasNext,
 		},
 	)
 }
@@ -337,16 +808,8 @@ func CreateStudent(
 	req.NIM = strings.TrimSpace(req.NIM)
 	req.Name = strings.TrimSpace(req.Name)
 
-	// Validasi menggunakan pure business rules.
-	validationErrors := ValidateCreateStudent(req)
-
-	if len(validationErrors) > 0 {
-		return helper.ErrorResponse(
-			c,
-			fiber.StatusUnprocessableEntity,
-			"validasi gagal",
-			validationErrors,
-		)
+	if errs := helper.ValidateStruct(req); errs != nil {
+		return helper.Validation(errs)
 	}
 
 	currentUser, ok := getCurrentAuthUser(c)
@@ -428,7 +891,6 @@ func ReplaceStudent(
 		)
 	}
 
-	// Ambil data lama terlebih dahulu untuk pemeriksaan ownership.
 	current, err := repo.FindByID(
 		c.Context(),
 		id,
@@ -463,8 +925,6 @@ func ReplaceStudent(
 		)
 	}
 
-	// Owner boleh mengubah data sendiri.
-	// Non-owner membutuhkan student:update:any.
 	if !CanAccessStudent(
 		currentUser,
 		current.OwnerID,
@@ -493,20 +953,10 @@ func ReplaceStudent(
 	req.NIM = strings.TrimSpace(req.NIM)
 	req.Name = strings.TrimSpace(req.Name)
 
-	// Validasi PUT menggunakan pure business rules.
-	validationErrors := ValidateUpdateStudent(req)
-
-	if len(validationErrors) > 0 {
-		return helper.ErrorResponse(
-			c,
-			fiber.StatusUnprocessableEntity,
-			"validasi gagal",
-			validationErrors,
-		)
+	if errs := helper.ValidateStruct(req); errs != nil {
+		return helper.Validation(errs)
 	}
 
-	// OwnerID sengaja tidak diambil dari request.
-	// OwnerID tetap menggunakan owner data sebelumnya.
 	student := model.Student{
 		ID:        id,
 		NIM:       req.NIM,
@@ -582,7 +1032,6 @@ func PatchStudent(
 		)
 	}
 
-	// Ambil data lama terlebih dahulu.
 	current, err := repo.FindByID(
 		c.Context(),
 		id,
@@ -617,8 +1066,6 @@ func PatchStudent(
 		)
 	}
 
-	// Owner boleh mengubah data sendiri.
-	// Non-owner membutuhkan student:update:any.
 	if !CanAccessStudent(
 		currentUser,
 		current.OwnerID,
@@ -658,25 +1105,17 @@ func PatchStudent(
 		)
 	}
 
-	// Salin data lama.
+	if errs := helper.ValidateStruct(req); errs != nil {
+		return helper.Validation(errs)
+	}
+
 	updated := current
 
-	// Terapkan perubahan menggunakan pure business rules.
-	validationErrors := ApplyPatch(
+	ApplyPatch(
 		&updated,
 		req,
 	)
 
-	if len(validationErrors) > 0 {
-		return helper.ErrorResponse(
-			c,
-			fiber.StatusUnprocessableEntity,
-			"validasi gagal",
-			validationErrors,
-		)
-	}
-
-	// OwnerID tetap menggunakan owner dari data lama.
 	updated.OwnerID = current.OwnerID
 
 	result, err := repo.Update(
