@@ -71,6 +71,12 @@ func main() {
 		permissionSet,
 	)
 
+	// Menangani endpoint yang tidak ditemukan.
+	// Harus diletakkan SETELAH seluruh route didaftarkan.
+	app.Use(func(c *fiber.Ctx) error {
+		return helper.NotFound("endpoint tidak ditemukan")
+	})
+
 	fmt.Println("Server berjalan di http://localhost:3000")
 
 	log.Fatal(app.Listen(":3000"))

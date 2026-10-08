@@ -131,6 +131,20 @@ func Register(
 	// -----------------------------------------------------
 
 	students.Get(
+		"/cursor",
+		middleware.RequirePermission(
+			permissionSet,
+			"student:list",
+		),
+		func(c *fiber.Ctx) error {
+			return service.GetStudentsCursor(
+				c,
+				repo,
+			)
+		},
+	)
+
+	students.Get(
 		"/:id",
 		func(c *fiber.Ctx) error {
 			return service.GetStudent(
