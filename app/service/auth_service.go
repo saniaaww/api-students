@@ -14,12 +14,8 @@ import (
 const bcryptCost = 12
 
 var (
-	ErrUsernameRequired = errors.New("username wajib diisi")
-	ErrEmailRequired    = errors.New("email wajib diisi")
-	ErrPasswordRequired = errors.New("password wajib diisi")
-	ErrPasswordWeak     = errors.New("password tidak memenuhi aturan keamanan")
-	ErrUsernameExists   = errors.New("username sudah digunakan")
-	ErrEmailExists      = errors.New("email sudah digunakan")
+	ErrUsernameExists = errors.New("username sudah digunakan")
+	ErrEmailExists    = errors.New("email sudah digunakan")
 )
 
 func RegisterUser(
@@ -30,22 +26,6 @@ func RegisterUser(
 
 	username := strings.TrimSpace(req.Username)
 	email := strings.TrimSpace(req.Email)
-
-	if username == "" {
-		return nil, ErrUsernameRequired
-	}
-
-	if email == "" {
-		return nil, ErrEmailRequired
-	}
-
-	if req.Password == "" {
-		return nil, ErrPasswordRequired
-	}
-
-	if !IsStrongPassword(req.Password) {
-		return nil, ErrPasswordWeak
-	}
 
 	existingUsername, err := repo.FindByUsername(ctx, username)
 	if err != nil {

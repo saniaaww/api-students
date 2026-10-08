@@ -14,6 +14,7 @@ func RegisterHandler(repo repository.UserRepository) fiber.Handler {
 		var req model.RegisterRequest
 
 		if err := c.BodyParser(&req); err != nil {
+
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"success": false,
 				"message": "format request tidak valid",
