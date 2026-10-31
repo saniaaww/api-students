@@ -1,11 +1,17 @@
+
 package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"api-students/app/repository"
+	"api-students/app/service"
 	"api-students/config"
 	"api-students/database"
 	"api-students/helper"
@@ -18,49 +24,151 @@ import (
 )
 
 func main() {
-	// Membaca file .env
+	// ==================================================
+	// 1. MEMUAT ENVIRONMENT
+	// ==================================================
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: file .env tidak ditemukan")
 	}
 
-	// Membaca konfigurasi environment
 	env := config.LoadEnv()
 
-	// Koneksi ke PostgreSQL
+	// Logger untuk komponen background Modul 11.
+	workerLogger := slog.New(
+		slog.NewJSONHandler(os.Stdout, nil),
+	)
+
+	// Context untuk graceful shutdown.
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
+
+	// ==================================================
+	// 2. KONEKSI POSTGRESQL
+	// ==================================================
 	pool, err := database.ConnectDB()
 	if err != nil {
-		log.Fatal("Gagal terhubung ke database:", err)
+		log.Fatal("Gagal terhubung ke PostgreSQL: ", err)
 	}
 	defer pool.Close()
 
-	// Membuat repository
+	log.Println("Berhasil terhubung ke PostgreSQL")
+
+	// ==================================================
+	// 3. KONEKSI MONGODB
+	// ==================================================
+	if env.MongoURI == "" {
+		log.Fatal("MONGO_URI belum diatur di file .env")
+	}
+
+	if env.MongoDatabase == "" {
+		log.Fatal("MONGO_DATABASE belum diatur di file .env")
+	}
+
+	mongoCtx, cancelMongo := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+
+	mongoClient, err := database.NewMongoClient(
+		mongoCtx,
+		env.MongoURI,
+	)
+	cancelMongo()
+
+	if err != nil {
+		log.Fatal("Gagal terhubung ke MongoDB: ", err)
+	}
+
+	defer func() {
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second,
+		)
+		defer cancel()
+
+		if err := mongoClient.Disconnect(ctx); err != nil {
+			log.Println("Gagal menutup koneksi MongoDB:", err)
+		}
+	}()
+
+	mongoDB := mongoClient.Database(env.MongoDatabase)
+
+	log.Printf(
+		"Berhasil terhubung ke MongoDB, database: %s",
+		mongoDB.Name(),
+	)
+
+	// ==================================================
+	// 4. MEMBUAT REPOSITORY
+	// ==================================================
+
+	// Repository PostgreSQL.
 	studentRepo := repository.NewStudentRepository(pool)
 	userRepo := repository.NewUserRepository(pool)
 	refreshRepo := repository.NewRefreshTokenRepository(pool)
-
-	// Repository untuk role dan permission
+	courseRepo := repository.NewCourseRepository(pool)
+	supervisorRepo := repository.NewSupervisorRepository(pool)
 	roleRepo := repository.NewRoleRepository(pool)
 
-	// Memuat permission dari database saat aplikasi dijalankan
-	rolePermissions, err := roleRepo.LoadPermissions(context.Background())
+	// Repository MongoDB.
+	portfolioRepo := repository.NewPortfolioRepository(mongoDB)
+
+	// Repository Modul 11: Outbox.
+	outboxRepo := repository.NewOutboxRepository(pool)
+
+	// ==================================================
+	// 5. TRANSACTION MANAGER
+	// ==================================================
+	txManager := repository.NewTxManager(pool)
+
+	// ==================================================
+	// 6. MEMBUAT SERVICE
+	// ==================================================
+
+	// CourseService sekarang menerima tiga parameter:
+	// CourseRepository, OutboxRepository, dan TxManager.
+	courseService := service.NewCourseService(
+		courseRepo,
+		outboxRepo,
+		txManager,
+	)
+
+	supervisorService := service.NewSupervisorService(
+		supervisorRepo,
+		txManager,
+	)
+
+	// ==================================================
+	// 7. MEMUAT PERMISSION
+	// ==================================================
+	rolePermissions, err := roleRepo.LoadPermissions(
+		context.Background(),
+	)
 	if err != nil {
-		log.Fatal("Gagal memuat permissions:", err)
+		log.Fatal("Gagal memuat permissions: ", err)
 	}
 
-	// Membuat PermissionSet
 	permissionSet := helper.NewPermissionSet(rolePermissions)
 
-	// Membuat aplikasi Fiber
+	// ==================================================
+	// 8. MEMBUAT APLIKASI FIBER
+	// ==================================================
 	app := fiber.New(fiber.Config{
 		AppName: "API Students - Praktikum Backend Lanjut",
 	})
 
-	// Middleware global
+	// Middleware global.
 	app.Use(requestid.New())
 	app.Use(config.NewLogger())
 	app.Use(cors.New())
 
-	// Registrasi seluruh route
+	// ==================================================
+	// 9. REGISTRASI ROUTE
+	// ==================================================
 	route.Register(
 		app,
 		pool,
@@ -69,15 +177,68 @@ func main() {
 		env.JWTSecret,
 		refreshRepo,
 		permissionSet,
+		courseService,
+		supervisorService,
+		portfolioRepo,
 	)
 
-	// Menangani endpoint yang tidak ditemukan.
-	// Harus diletakkan SETELAH seluruh route didaftarkan.
+	// Endpoint tidak ditemukan.
 	app.Use(func(c *fiber.Ctx) error {
 		return helper.NotFound("endpoint tidak ditemukan")
 	})
 
-	fmt.Println("Server berjalan di http://localhost:3000")
+	// ==================================================
+	// 10. MENJALANKAN BACKGROUND WORKER MODUL 11
+	// ==================================================
+	stopWorker := startWorker(
+		ctx,
+		workerLogger,
+		pool,
+	)
 
-	log.Fatal(app.Listen(":3000"))
+	if stopWorker == nil {
+		log.Fatal("Gagal menjalankan background worker")
+	}
+
+	// ==================================================
+	// 11. MENJALANKAN HTTP SERVER
+	// ==================================================
+	serverErr := make(chan error, 1)
+
+	go func() {
+		log.Println("Server berjalan di http://localhost:3000")
+		serverErr <- app.Listen(":3000")
+	}()
+
+	// Menunggu Ctrl+C atau server berhenti.
+	select {
+	case <-ctx.Done():
+		log.Println("Menerima sinyal shutdown...")
+
+	case err := <-serverErr:
+		if err != nil {
+			log.Println("HTTP server berhenti:", err)
+		}
+		stop()
+	}
+
+	// ==================================================
+	// 12. GRACEFUL SHUTDOWN
+	// ==================================================
+
+	// Hentikan HTTP server terlebih dahulu.
+	shutdownCtx, cancelShutdown := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancelShutdown()
+
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+		log.Println("Gagal melakukan shutdown HTTP:", err)
+	}
+
+	// Setelah HTTP berhenti, hentikan relay dan worker.
+	stopWorker()
+
+	log.Println("Aplikasi berhenti dengan rapi")
 }

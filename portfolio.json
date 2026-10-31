@@ -1,0 +1,20 @@
+{
+  "headline": "Backend Developer",
+  "bio": "Mahasiswa Teknik Informatika yang tertarik pada pengembangan API.",
+  "projects": [
+    {
+      "project_id": "project-001",
+      "title": "API Students",
+      "technologies": ["Go", "Fiber", "PostgreSQL", "MongoDB"],
+      "link": "https://github.com/username/api-students",
+      "year": 2026
+    }
+  ],
+  "certificates": [
+    {
+      "name": "Backend Development",
+      "issuer": "Kampus",
+      "date": "2026-10-01"
+    }
+  ]
+}

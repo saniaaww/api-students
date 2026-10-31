@@ -1209,3 +1209,26 @@ func DeleteStudent(
 		fiber.StatusNoContent,
 	)
 }
+
+func GetCourses(
+	c *fiber.Ctx,
+	courseService *CourseService,
+) error {
+	courses, err := courseService.Courses(c.Context())
+	if err != nil {
+		return helper.ErrorResponse(
+			c,
+			fiber.StatusInternalServerError,
+			"gagal mengambil data kelas",
+			nil,
+		)
+	}
+
+	return helper.SuccessResponse(
+		c,
+		fiber.StatusOK,
+		"Data kelas berhasil diambil",
+		courses,
+		nil,
+	)
+}

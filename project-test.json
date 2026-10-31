@@ -1,0 +1,9 @@
+{
+    "year":  2026,
+    "title":  "Concurrent Test 18",
+    "technologies":  [
+                         "Go",
+                         "PostgreSQL"
+                     ],
+    "link":  "https://example.com/project-18"
+}
